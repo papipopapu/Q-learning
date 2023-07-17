@@ -16,7 +16,7 @@ class Agent {
     float discount, lr;
     std::mt19937 rng;
     std::uniform_real_distribution<float> unif;
-    float Q_table[Environment::n_states][Environment::n_actions] = {0};
+    float Q_table[Environment::n_states][Environment::n_actions];
     public:
     Agent(int n_episodes, int max_iter_episode,
       float exploration_decay, float max_exploration_prob, float min_exploration_prob, float discount, float lr) {
@@ -32,6 +32,14 @@ class Agent {
 
         rng.seed(0);
         unif = std::uniform_real_distribution<float>(0, 1);
+
+        // initialize Q_table to 0.0001 to check if it's been updated
+        for (int i = 0; i < Environment::n_states; i++) {
+            for (int j = 0; j < Environment::n_actions; j++) {
+                Q_table[i][j] = 0.0001;
+            }
+        }
+
     }
 
     int best_action() { // maybe overoptimize later by storing best action in Q_table
@@ -57,57 +65,62 @@ class Agent {
         return best_action;
     }
     void run() {
-        int player_state, opponent_state, opponent_action, player_action, best_player_action, reward;
+        int state_0, state_1, state_2, action_0, action_1, action_2;
+        float reward_0, reward_1;
         float exploration_prob;
         bool done;
         StepInfo info;
 
         for (int i = 0; i < n_episodes; i++) {
-            player_state = environment.reset(); // returns state index
-            done = false;
+            environment.reset(); // returns state index
             exploration_prob = std::max(min_exploration_prob, max_exploration_prob * std::exp(-exploration_decay * i));
             
-            // lets make the first move without any updates
-            if (unif(rng) < exploration_prob) {
-                player_action = environment.sample_action();
-            } else {
-                player_action = this->best_action();
+            // 50% chance of random oponent going first
+            if (unif(rng) < 0.5) {
+                action_0 = environment.sample_action();
+                environment.step(action_0);
+                // impossible to win or lose on first move so whatever
             }
-            info = environment.step(player_action);
-            opponent_state = info.next_state;
-            // obviously you cannot win on your first move, but just in case
-            if (info.done) {
-                Q_table[player_state][player_action] = Q_table[player_state][player_action] * (1 - lr) + lr * info.reward;
-                continue;
-            } 
 
-            // now lets do the rest of the moves
             for (int j = 1; j < max_iter_episode; j++) {
-                
-                // opponent moves
+                // player move
+                state_0 = environment.get_state();
                 if (unif(rng) < exploration_prob) {
-                    opponent_action = environment.sample_action();
+                    action_0 = environment.sample_action();
                 } else {
-                    opponent_action = this->best_action();
+                    action_0 = best_action();
                 }
-                info = environment.step(opponent_action);
-                // lets assume the game is deterministic (i.e., if you win on your move, Q(s, a) is set to the reward)
-                // if this move ends the game, then Q(s, a) = r, we update the Q table with last state and opponents move
-                if (info.done) {
-                    Q_table[opponent_state][opponent_action] = Q_table[opponent_state][opponent_action] * (1 - lr) + lr * info.reward;
-                    // also update the Q table with the previous state and action,
-                    // since there exists a response to the player move that ends the game
-                    // lets try doing a normal update for now (i.e., not setting Q(s, a) = r)
-                    Q_table[player_state][player_action] = Q_table[player_state][player_action] * (1 - lr) - lr * info.reward;
+                info = environment.step(action_0);
+                done = info.done;
+                state_1 = info.next_state;
+                reward_0 = info.reward;
+                if (done) {
+                    Q_table[state_0][action_0] = reward_0;
                     break;
                 }
-                // otherwise, lets update Q for the previous state and action
-                best_player_action = this->best_action();
-                Q_table[player_state][player_action] = Q_table[player_state][player_action] * (1 - lr) + lr * (info.reward + discount * Q_table[info.next_state][best_player_action]);
+                // opponent move
+                action_1 = environment.sample_action();
+                info = environment.step(action_1);
+                reward_1 = info.reward;
+                done = info.done;
+                if (done) {
+                    // update opponent action
+                    Q_table[state_1][action_1] = reward_1;
+                    // update player action
+                    if (Q_table[state_0][action_0] == 0.0001) {
+                        Q_table[state_0][action_0] = -reward_1;
+                    } else {
+                        Q_table[state_0][action_0] = std::min(Q_table[state_0][action_0], -reward_1);
+                    }
+                    break;
+                }
+                // get our best reponse
+                state_2 = info.next_state;
+                action_2 = best_action();
+                // update player action
+                Q_table[state_0][action_0] = (1 - lr) * Q_table[state_0][action_0] + lr * (reward_1 + discount * Q_table[state_2][action_2]);
 
-                // now we make the previous state and action the opponents state and action
-                player_state = opponent_state;
-                player_action = opponent_action;
+                
             }
         }
     }
@@ -132,7 +145,43 @@ class Agent {
         }
         file.close();
     }
-    
+    void play_against_random(int N, float &winrate, float &loserate) {
+        winrate = 0;
+        loserate = 0;
+        for (int i = 0; i < N; i++) {
+            environment.reset();
+            // 50% chance of random oponent going first
+            if (unif(rng) < 0.5) {
+                int action = environment.sample_action();
+                environment.step(action);
+            }
+
+
+            while (true) {
+                // agent plays
+                int action = best_action();
+                StepInfo info = environment.step(action);
+                if (info.done) {
+                    if (info.reward == 1) {
+                        winrate += 1;
+                    }
+                    break;
+                }
+                // opponent plays
+                action = environment.sample_action();
+                info = environment.step(action);
+                if (info.done) {
+                    if (info.reward == 1) {
+                        loserate += 1;
+                    } 
+                    break;
+                }
+            }
+
+        }
+        winrate /= N;
+        loserate /= N;
+    }
 
 };
 

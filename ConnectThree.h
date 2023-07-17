@@ -63,8 +63,12 @@ class ConnectThree {
             info.done = false;
         }
         return info; // always from the point of view of the one to play
-
     }
+
+
+
+
+
     int get_state() {
         return state_idx;
     }
